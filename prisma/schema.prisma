@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  image     String?
+  createdAt DateTime @default(now())
+
+  sessions TrainingSession[]
+}
+
+model TrainingSession {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  date        DateTime
+  type        String   // "co2" | "o2"
+  rounds      Int
+  holdTime    Int      // total breath-hold seconds
+  breatheTime Int      // total breathe seconds
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, date])
+}
