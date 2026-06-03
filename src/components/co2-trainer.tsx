@@ -1,17 +1,25 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import TrainingCalendar from "@/components/training-calendar";
-import { saveSession, getSessionCount, formatDate } from "@/lib/sessions";
+import { saveSession, fetchSessions } from "@/lib/sessions";
 
-// CO2 Table config
-const BREATH_HOLD_SECONDS = 30;
-const INITIAL_REST_SECONDS = 120; // 2 minutes
-const REST_DECREASE_SECONDS = 15;
 const NUM_ROUNDS = 8;
 
+// CO2 Table: fixed hold, decreasing rest
+const CO2_HOLD = 40;
+const CO2_REST_START = 120;
+const CO2_REST_STEP = 15;
+
+// O2 Table: fixed rest, increasing hold
+const O2_REST = 120;
+const O2_HOLD_START = 35;
+const O2_HOLD_STEP = 5;
+
+type TrainingMode = "co2" | "o2";
+type TrainingStyle = "static" | "dynamic";
 type Phase = "rest" | "hold";
 type Status = "idle" | "running" | "paused" | "finished";
 
@@ -20,10 +28,42 @@ interface Round {
   hold: number;
 }
 
-function generateCO2Table(): Round[] {
+const TRAINING_LABELS: Record<TrainingMode, string> = {
+  co2: "CO2 Tolerance Table",
+  o2: "O2 Capacity Table",
+};
+
+const TIPS: Record<TrainingMode, Record<TrainingStyle, string[]>> = {
+  co2: {
+    static: [
+      "Relax completely during rest — drop your shoulders, unclench your jaw.",
+      "The urge to breathe is CO2 buildup, not lack of oxygen. You have more time than you think.",
+      "Discomfort increases each round by design — that adaptation is the whole point.",
+    ],
+    dynamic: [
+      "Walk at a slow, steady pace. Don't rush — calm movement conserves oxygen.",
+      "Moving muscles burn O2 fast; expect the urge to breathe sooner than in static holds.",
+      "Keep your upper body relaxed while walking. Shoulder tension costs you seconds.",
+    ],
+  },
+  o2: {
+    static: [
+      "Each round is longer — take full, slow recovery breaths between holds.",
+      "Push gently through the first contractions. Stop only if you feel dizzy.",
+      "O2 tables build your max hold time. The discomfort near the end is the training.",
+    ],
+    dynamic: [
+      "Start walking as soon as the hold begins — the moving body trains for real diving conditions.",
+      "The later rounds will feel significantly harder. That's intentional.",
+      "Focus on your footsteps, not the clock. Distraction helps you last longer.",
+    ],
+  },
+};
+
+function generateTable(mode: TrainingMode): Round[] {
   return Array.from({ length: NUM_ROUNDS }, (_, i) => ({
-    rest: INITIAL_REST_SECONDS - i * REST_DECREASE_SECONDS,
-    hold: BREATH_HOLD_SECONDS,
+    rest: mode === "co2" ? CO2_REST_START - i * CO2_REST_STEP : O2_REST,
+    hold: mode === "co2" ? CO2_HOLD : O2_HOLD_START + i * O2_HOLD_STEP,
   }));
 }
 
@@ -34,24 +74,27 @@ function formatTime(seconds: number): string {
 }
 
 export default function CO2Trainer() {
-  const table = generateCO2Table();
-
+  const [trainingMode, setTrainingMode] = useState<TrainingMode>("co2");
+  const [trainingStyle, setTrainingStyle] = useState<TrainingStyle>("static");
   const [status, setStatus] = useState<Status>("idle");
   const [currentRound, setCurrentRound] = useState(0);
   const [phase, setPhase] = useState<Phase>("rest");
-  const [timeLeft, setTimeLeft] = useState(table[0].rest);
-  const [sessionCount, setSessionCount] = useState(() =>
-    typeof window !== "undefined" ? getSessionCount() : 0
-  );
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const [sessionCount, setSessionCount] = useState(0);
   const [calendarKey, setCalendarKey] = useState(0);
+
+  const table = useMemo(() => generateTable(trainingMode), [trainingMode]);
+
+  useEffect(() => {
+    fetchSessions().then((s) => setSessionCount(s.length));
+  }, [calendarKey]);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<AudioContext | null>(null);
 
   const playBeep = useCallback((frequency: number, duration: number) => {
     try {
-      if (!audioRef.current) {
-        audioRef.current = new AudioContext();
-      }
+      if (!audioRef.current) audioRef.current = new AudioContext();
       const ctx = audioRef.current;
       const oscillator = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -102,15 +145,12 @@ export default function CO2Trainer() {
         const totalHold = table.reduce((sum, r) => sum + r.hold, 0);
         const totalBreathe = table.reduce((sum, r) => sum + r.rest, 0);
         saveSession({
-          date: formatDate(new Date()),
-          type: "co2",
+          type: trainingMode,
           rounds: NUM_ROUNDS,
           holdTime: totalHold,
           breatheTime: totalBreathe,
           completed: true,
-        });
-        setSessionCount(getSessionCount());
-        setCalendarKey((k) => k + 1);
+        }).then(() => setCalendarKey((k) => k + 1));
         clearTimer();
         playFinish();
       } else {
@@ -120,7 +160,7 @@ export default function CO2Trainer() {
         playPhaseChange();
       }
     }
-  }, [phase, currentRound, table, playPhaseChange, playFinish, clearTimer]);
+  }, [phase, currentRound, table, trainingMode, playPhaseChange, playFinish, clearTimer]);
 
   useEffect(() => {
     if (status !== "running") {
@@ -134,9 +174,7 @@ export default function CO2Trainer() {
           advancePhase();
           return 0;
         }
-        if (prev <= 4) {
-          playCountdown();
-        }
+        if (prev <= 4) playCountdown();
         return prev - 1;
       });
     }, 1000);
@@ -145,9 +183,7 @@ export default function CO2Trainer() {
   }, [status, advancePhase, clearTimer, playCountdown]);
 
   const start = () => {
-    if (!audioRef.current) {
-      audioRef.current = new AudioContext();
-    }
+    if (!audioRef.current) audioRef.current = new AudioContext();
     setCurrentRound(0);
     setPhase("rest");
     setTimeLeft(table[0].rest);
@@ -165,6 +201,8 @@ export default function CO2Trainer() {
     setTimeLeft(table[0].rest);
   };
 
+  const displayTime = status === "idle" ? table[0].rest : timeLeft;
+
   const currentPhaseDuration =
     phase === "rest" ? table[currentRound]?.rest : table[currentRound]?.hold;
 
@@ -173,6 +211,11 @@ export default function CO2Trainer() {
     table.slice(0, currentRound).reduce((sum, r) => sum + r.rest + r.hold, 0) +
     (phase === "hold" ? (table[currentRound]?.rest ?? 0) : 0) +
     (currentPhaseDuration ? currentPhaseDuration - timeLeft : 0);
+
+  const tips = TIPS[trainingMode][trainingStyle];
+
+  const holdLabel =
+    trainingStyle === "dynamic" && phase === "hold" ? "Hold · Keep Walking" : "Hold Breath";
 
   return (
     <div className="relative z-[1] min-h-screen flex flex-col items-center justify-center p-5 gap-6">
@@ -183,7 +226,9 @@ export default function CO2Trainer() {
             Apnea Trainer
           </h1>
           <p className="text-[13px] font-light tracking-[2.5px] uppercase text-[rgba(180,220,240,0.55)]">
-            CO2 Tolerance Table
+            {TRAINING_LABELS[trainingMode]}
+            {" · "}
+            {trainingStyle === "dynamic" ? "Dynamic" : "Static"}
           </p>
           {sessionCount > 0 && (
             <p className="text-xs text-muted-foreground">
@@ -191,6 +236,61 @@ export default function CO2Trainer() {
             </p>
           )}
         </div>
+
+        {/* Mode + Style selectors — idle only */}
+        {status === "idle" && (
+          <div className="space-y-3">
+            <div className="text-[11px] tracking-[3px] uppercase text-[rgba(180,220,240,0.38)] font-light text-center">
+              Table Type
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {(["co2", "o2"] as TrainingMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setTrainingMode(mode)}
+                  className={`rounded-xl border px-4 py-3 text-left transition-all ${
+                    trainingMode === mode
+                      ? "border-[rgba(100,190,230,0.45)] bg-[rgba(14,127,190,0.18)] text-[#d6eef7]"
+                      : "border-white/10 bg-white/[0.04] text-[rgba(180,220,240,0.5)] hover:border-white/20"
+                  }`}
+                >
+                  <div className="text-sm font-medium">
+                    {mode === "co2" ? "CO2 Table" : "O2 Table"}
+                  </div>
+                  <div className="text-[11px] mt-0.5 opacity-60">
+                    {mode === "co2"
+                      ? `Fixed ${formatTime(CO2_HOLD)} hold · Shrinking rest`
+                      : `Fixed ${formatTime(O2_REST)} rest · Growing holds`}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="text-[11px] tracking-[3px] uppercase text-[rgba(180,220,240,0.38)] font-light text-center pt-1">
+              Style
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {(["static", "dynamic"] as TrainingStyle[]).map((style) => (
+                <button
+                  key={style}
+                  onClick={() => setTrainingStyle(style)}
+                  className={`rounded-xl border px-4 py-3 text-left transition-all ${
+                    trainingStyle === style
+                      ? "border-[rgba(100,190,230,0.45)] bg-[rgba(14,127,190,0.18)] text-[#d6eef7]"
+                      : "border-white/10 bg-white/[0.04] text-[rgba(180,220,240,0.5)] hover:border-white/20"
+                  }`}
+                >
+                  <div className="text-sm font-medium capitalize">{style}</div>
+                  <div className="text-[11px] mt-0.5 opacity-60">
+                    {style === "static"
+                      ? "Sit or lie still during holds"
+                      : "Walk slowly during holds"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Timer Display */}
         <Card
@@ -209,15 +309,13 @@ export default function CO2Trainer() {
           <CardContent className="pt-8 pb-8 text-center space-y-4">
             {status !== "idle" && status !== "finished" && (
               <div className="text-[11px] tracking-[3px] uppercase text-muted-foreground font-light">
-                {phase === "hold" ? "Hold Breath" : "Breathe"}
+                {phase === "hold" ? holdLabel : "Breathe"}
               </div>
             )}
 
             {status === "finished" ? (
               <div className="space-y-2">
-                <div className="font-heading text-5xl text-[rgba(100,190,230,0.8)]">
-                  Done!
-                </div>
+                <div className="font-heading text-5xl text-[rgba(100,190,230,0.8)]">Done!</div>
                 <p className="text-muted-foreground text-sm">
                   All {NUM_ROUNDS} rounds completed
                 </p>
@@ -230,7 +328,7 @@ export default function CO2Trainer() {
                     : "text-[#e8f4f8]"
                 }`}
               >
-                {formatTime(timeLeft)}
+                {formatTime(displayTime)}
               </div>
             )}
 
@@ -239,7 +337,6 @@ export default function CO2Trainer() {
                 <div className="text-[13px] font-light text-[rgba(100,190,230,0.7)] tracking-wider uppercase">
                   Round {currentRound + 1} of {NUM_ROUNDS}
                 </div>
-                {/* Progress dots */}
                 <div className="flex justify-center gap-1.5 pt-1">
                   {table.map((_, i) => (
                     <div
@@ -300,6 +397,23 @@ export default function CO2Trainer() {
           </div>
         )}
 
+        {/* Tips */}
+        <div className="space-y-2">
+          <div className="text-[11px] tracking-[3px] uppercase text-[rgba(180,220,240,0.38)] font-light ml-1">
+            Tips
+          </div>
+          <Card>
+            <CardContent className="py-3 px-4 space-y-2.5">
+              {tips.map((tip, i) => (
+                <div key={i} className="flex gap-2.5 text-[13px] text-[rgba(180,220,240,0.65)] font-light leading-relaxed">
+                  <span className="text-[rgba(100,190,230,0.4)] mt-px shrink-0">·</span>
+                  <span>{tip}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+
         {/* Section label */}
         <div className="text-[11px] tracking-[3px] uppercase text-[rgba(180,220,240,0.38)] font-light ml-1">
           Rounds
@@ -327,7 +441,7 @@ export default function CO2Trainer() {
                     }`}
                   >
                     <span className="text-xs text-[rgba(180,220,240,0.3)] w-6 font-light">
-                      {isDone ? "\u2713" : `${i + 1}`}
+                      {isDone ? "✓" : `${i + 1}`}
                     </span>
                     <span className="flex-1 text-[rgba(130,200,240,0.8)]">
                       Rest {formatTime(round.rest)}
@@ -344,8 +458,9 @@ export default function CO2Trainer() {
 
         {/* Info */}
         <div className="text-center text-xs font-light text-[rgba(180,220,240,0.28)] tracking-wide">
-          Hold: {formatTime(BREATH_HOLD_SECONDS)} (constant) &middot; Rest starts at{" "}
-          {formatTime(INITIAL_REST_SECONDS)}, decreases by {REST_DECREASE_SECONDS}s
+          {trainingMode === "co2"
+            ? `Hold: ${formatTime(CO2_HOLD)} (constant) · Rest starts at ${formatTime(CO2_REST_START)}, decreases by ${CO2_REST_STEP}s`
+            : `Rest: ${formatTime(O2_REST)} (constant) · Holds start at ${formatTime(O2_HOLD_START)}, increase by ${O2_HOLD_STEP}s`}
         </div>
 
         {/* Calendar & Streaks */}

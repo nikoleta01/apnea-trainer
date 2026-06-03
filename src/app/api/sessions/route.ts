@@ -1,18 +1,20 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 
-// GET /api/sessions?userId=...&month=2026-03
+// GET /api/sessions?month=2026-03
 export async function GET(request: NextRequest) {
-  const { searchParams } = request.nextUrl;
-  const userId = searchParams.get("userId");
-
-  if (!userId) {
-    return Response.json({ error: "userId is required" }, { status: 400 });
+  const session = await auth();
+  if (!session?.user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const { searchParams } = request.nextUrl;
   const month = searchParams.get("month"); // e.g. "2026-03"
 
-  const where: { userId: string; date?: { gte: Date; lt: Date } } = { userId };
+  const where: { userId: string; date?: { gte: Date; lt: Date } } = {
+    userId: session.user.id,
+  };
 
   if (month) {
     const [year, m] = month.split("-").map(Number);
@@ -32,19 +34,21 @@ export async function GET(request: NextRequest) {
 
 // POST /api/sessions
 export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const { userId, type, rounds, holdTime, breatheTime, completed } = body;
-
-  if (!userId || !type) {
-    return Response.json(
-      { error: "userId and type are required" },
-      { status: 400 }
-    );
+  const session = await auth();
+  if (!session?.user) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const session = await prisma.trainingSession.create({
+  const body = await request.json();
+  const { type, rounds, holdTime, breatheTime, completed } = body;
+
+  if (!type) {
+    return Response.json({ error: "type is required" }, { status: 400 });
+  }
+
+  const created = await prisma.trainingSession.create({
     data: {
-      userId,
+      userId: session.user.id,
       date: new Date(),
       type,
       rounds: rounds ?? 0,
@@ -54,5 +58,5 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return Response.json(session, { status: 201 });
+  return Response.json(created, { status: 201 });
 }

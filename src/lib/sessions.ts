@@ -1,9 +1,7 @@
-// Session storage — localStorage for now, swap to API + DB after auth
-
-const STORAGE_KEY = "apnea-trainer-session-dates";
+// Client-side session helpers — talks to /api/sessions (authenticated)
 
 export interface SessionRecord {
-  date: string; // ISO date string "YYYY-MM-DD"
+  date: string; // "YYYY-MM-DD"
   type: string;
   rounds: number;
   holdTime: number;
@@ -11,99 +9,98 @@ export interface SessionRecord {
   completed: boolean;
 }
 
-function getStoredSessions(): SessionRecord[] {
-  if (typeof window === "undefined") return [];
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return [];
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return [];
-  }
+interface DbSession {
+  id: string;
+  date: string;
+  type: string;
+  rounds: number;
+  holdTime: number;
+  breatheTime: number;
+  completed: boolean;
 }
 
-function saveSessions(sessions: SessionRecord[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+export async function saveSession(session: Omit<SessionRecord, "date">) {
+  const res = await fetch("/api/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(session),
+  });
+  if (!res.ok) throw new Error("Failed to save session");
+  return res.json();
 }
 
-export function saveSession(session: SessionRecord) {
-  const sessions = getStoredSessions();
-  sessions.push(session);
-  saveSessions(sessions);
+export async function fetchSessions(): Promise<DbSession[]> {
+  const res = await fetch("/api/sessions");
+  if (!res.ok) return [];
+  return res.json();
 }
 
-export function getSessions(): SessionRecord[] {
-  return getStoredSessions();
+/** Extract YYYY-MM-DD from a DbSession's ISO date string */
+export function sessionDay(s: DbSession): string {
+  return s.date.slice(0, 10);
 }
 
-export function getSessionDates(): Set<string> {
-  return new Set(getStoredSessions().map((s) => s.date));
+export function getSessionDates(sessions: DbSession[]): Set<string> {
+  return new Set(sessions.map(sessionDay));
 }
 
-export function getSessionCount(): number {
-  return getStoredSessions().length;
+export function getSessionCount(sessions: DbSession[]): number {
+  return sessions.length;
 }
 
-/** Get unique training days for a given month (0-indexed) */
-export function getMonthSessions(year: number, month: number): SessionRecord[] {
+/** Sessions filtered to a specific month (0-indexed) */
+export function getMonthSessions(
+  sessions: DbSession[],
+  year: number,
+  month: number
+): DbSession[] {
   const prefix = `${year}-${String(month + 1).padStart(2, "0")}`;
-  return getStoredSessions().filter((s) => s.date.startsWith(prefix));
+  return sessions.filter((s) => sessionDay(s).startsWith(prefix));
 }
 
-/** Current streak: consecutive days ending today (or yesterday) */
-export function getCurrentStreak(): number {
-  const dates = getSessionDates();
+/** Current streak: consecutive days ending today or yesterday */
+export function getCurrentStreak(sessions: DbSession[]): number {
+  const dates = getSessionDates(sessions);
   if (dates.size === 0) return 0;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Check if today or yesterday has a session (streak is still alive)
   const todayStr = formatDate(today);
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterdayStr = formatDate(yesterday);
 
   let current: Date;
-  if (dates.has(todayStr)) {
-    current = today;
-  } else if (dates.has(yesterdayStr)) {
-    current = yesterday;
-  } else {
-    return 0;
-  }
+  if (dates.has(todayStr)) current = today;
+  else if (dates.has(yesterdayStr)) current = yesterday;
+  else return 0;
 
   let streak = 0;
   while (dates.has(formatDate(current))) {
     streak++;
     current.setDate(current.getDate() - 1);
   }
-
   return streak;
 }
 
-/** Longest streak ever */
-export function getLongestStreak(): number {
-  const dates = [...getSessionDates()].sort();
+export function getLongestStreak(sessions: DbSession[]): number {
+  const dates = [...getSessionDates(sessions)].sort();
   if (dates.length === 0) return 0;
 
   let longest = 1;
   let current = 1;
-
   for (let i = 1; i < dates.length; i++) {
     const prev = new Date(dates[i - 1]);
     const curr = new Date(dates[i]);
     const diffDays = (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24);
-
     if (diffDays === 1) {
       current++;
       longest = Math.max(longest, current);
     } else if (diffDays > 1) {
       current = 1;
     }
-    // diffDays === 0 means same day, skip
   }
-
   return longest;
 }
 

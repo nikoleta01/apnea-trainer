@@ -1,18 +1,29 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
+  fetchSessions,
   getMonthSessions,
   getCurrentStreak,
   getLongestStreak,
   getSessionDates,
-  getSessionCount,
+  sessionDay,
 } from "@/lib/sessions";
-import { ChevronLeft, ChevronRight, Flame, Trophy, Calendar } from "lucide-react";
+import { ChevronLeft, ChevronRight, Flame, Trophy, Calendar, Droplet } from "lucide-react";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+interface DbSession {
+  id: string;
+  date: string;
+  type: string;
+  rounds: number;
+  holdTime: number;
+  breatheTime: number;
+  completed: boolean;
+}
 
 function getMonthGrid(year: number, month: number) {
   const firstDay = new Date(year, month, 1);
@@ -30,31 +41,29 @@ function getMonthGrid(year: number, month: number) {
 
 export default function TrainingCalendar() {
   const [currentDate, setCurrentDate] = useState(() => new Date());
-  const [sessionDates] = useState(() =>
-    typeof window !== "undefined" ? getSessionDates() : new Set<string>()
-  );
-  const [streak] = useState(() =>
-    typeof window !== "undefined" ? getCurrentStreak() : 0
-  );
-  const [longestStreak] = useState(() =>
-    typeof window !== "undefined" ? getLongestStreak() : 0
-  );
-  const [totalSessions] = useState(() =>
-    typeof window !== "undefined" ? getSessionCount() : 0
-  );
+  const [sessions, setSessions] = useState<DbSession[]>([]);
+
+  useEffect(() => {
+    fetchSessions().then(setSessions);
+  }, []);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
   const grid = useMemo(() => getMonthGrid(year, month), [year, month]);
 
+  const sessionDates = useMemo(() => getSessionDates(sessions), [sessions]);
+  const streak = useMemo(() => getCurrentStreak(sessions), [sessions]);
+  const longestStreak = useMemo(() => getLongestStreak(sessions), [sessions]);
+  const totalSessions = sessions.length;
+
   const monthSessions = useMemo(
-    () => getMonthSessions(year, month),
-    [year, month]
+    () => getMonthSessions(sessions, year, month),
+    [sessions, year, month]
   );
 
   const monthSessionDays = useMemo(
-    () => new Set(monthSessions.map((s) => new Date(s.date).getDate())),
+    () => new Set(monthSessions.map((s) => new Date(sessionDay(s)).getDate())),
     [monthSessions]
   );
 
@@ -72,12 +81,10 @@ export default function TrainingCalendar() {
 
   return (
     <div className="space-y-4">
-      {/* Section label */}
       <div className="text-[11px] tracking-[3px] uppercase text-[rgba(180,220,240,0.38)] font-light ml-1">
         Progress
       </div>
 
-      {/* Stats row */}
       <div className="grid grid-cols-3 gap-3">
         <Card>
           <CardContent className="pt-5 pb-4 text-center">
@@ -108,7 +115,6 @@ export default function TrainingCalendar() {
         </Card>
       </div>
 
-      {/* Calendar */}
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
@@ -124,7 +130,6 @@ export default function TrainingCalendar() {
           </div>
         </CardHeader>
         <CardContent>
-          {/* Day headers */}
           <div className="grid grid-cols-7 gap-1 mb-2">
             {DAYS.map((d) => (
               <div
@@ -136,7 +141,6 @@ export default function TrainingCalendar() {
             ))}
           </div>
 
-          {/* Day cells */}
           <div className="grid grid-cols-7 gap-0.5">
             {grid.map((day, i) => {
               if (day === null) {
@@ -154,20 +158,23 @@ export default function TrainingCalendar() {
                   className={`aspect-square flex items-center justify-center rounded-lg text-[13px] relative cursor-default transition-colors
                     ${isFuture ? "text-[rgba(200,230,245,0.15)]" : "text-[rgba(200,230,245,0.5)]"}
                     ${isToday ? "bg-[rgba(14,127,190,0.3)] border border-[rgba(100,190,230,0.3)] text-[#a8d8f0] font-medium" : ""}
-                    ${hasSession && !isToday ? "text-[rgba(200,230,245,0.7)]" : ""}
+                    ${hasSession && !isToday ? "text-[#d0ecf8] font-medium" : ""}
                     ${!isToday && !isFuture ? "hover:bg-[rgba(255,255,255,0.05)]" : ""}
                   `}
                 >
-                  {day}
                   {hasSession && (
-                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[rgba(100,190,230,0.6)]" />
+                    <Droplet
+                      className="absolute inset-0 w-full h-full text-[rgba(100,190,230,0.5)]"
+                      fill="rgba(14,127,190,0.25)"
+                      strokeWidth={1.5}
+                    />
                   )}
+                  <span className="relative z-10">{day}</span>
                 </div>
               );
             })}
           </div>
 
-          {/* Month summary */}
           <div className="mt-4 pt-3 border-t border-white/5 text-center text-xs font-light text-[rgba(180,220,240,0.3)] tracking-wide">
             {monthSessionDays.size} training day{monthSessionDays.size !== 1 ? "s" : ""} this month
           </div>
